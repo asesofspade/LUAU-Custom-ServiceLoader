@@ -10,7 +10,7 @@ This system uses a **ModuleLoader** to scan the folder containing APIs and passe
 ---
 
 ## Folder Structure
-
+```
 servicesapi/
 ├─ servicesloader -- central loader module
 ├─ apis/
@@ -22,9 +22,7 @@ servicesapi/
 └─ public/ -- client-only
 Modules/
 └─ ModulesLoader -- module that scans folders and requires modules
-
-lua
-Copy code
+```
 
 ---
 
