@@ -1,123 +1,124 @@
 local Animations = {}
-local self = Animations
+Animations.__index = Animations
 
-self.plr = game.Players.LocalPlayer
-self.Tracks = {}
-
-self.MarkerSignals = {
-    Freeze = function(track)
-        track:AdjustSpeed(0)
-    end,
-    ResetSpeed = function(track)
-        track:AdjustSpeed(1)
-    end,
-}
-
-function self:Create(data)
-    self.data = {
-        broadcast = data.remotes.broadcast
-    }
+function Animations.new()
+	local self = setmetatable({}, Animations)
+	self.stateTrack = nil
+	self.actionTrack = nil
+	self.lastStateAnim = nil
+	self.Animator = nil
+	return self
 end
 
-function self:_registerANIMS()
-    return
+function Animations:_getAnimator(character)
+	if self.Animator then return self.Animator end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	self.Animator = animator
+	return animator
 end
 
-function self:_playAnimation(target: Instance, ID: string, looped: boolean)
-    if not target then return end
+local function loadTrack(animator, id, priority, looped)
+	local anim = Instance.new("Animation")
+	anim.AnimationId = id
+	local track = animator:LoadAnimation(anim)
+	track.Priority = priority
+	track.Looped = looped
+	print("[loadTrack] Loaded animation:", id, "Priority:", priority.Name, "Looped:", looped)
+	return track
+end
 
-    local Character = target:IsA("Player") and workspace:FindFirstChild(target.Name) or target
-    if not Character then return end
+function Animations:_stopAction()
+	if self.actionTrack then
+		print("[_stopAction] Stopping action animation:", self.actionTrack.Animation.AnimationId)
+		self.actionTrack:Stop()
+		self.actionTrack = nil
+	else
+		print("[_stopAction] No actionTrack to stop")
+	end
 
-    local Animator
-    local Humanoid = Character:FindFirstChildOfClass("Humanoid")
-    local AnimationController = Character:FindFirstChildOfClass("AnimationController")
-
-    if Humanoid then
-        Animator = Humanoid:FindFirstChildOfClass("Animator")
-        if not Animator then
-            Animator = Instance.new("Animator")
-            Animator.Parent = Humanoid
-        end
-    elseif AnimationController then
-        Animator = AnimationController:FindFirstChildOfClass("Animator")
-        if not Animator then
-            Animator = Instance.new("Animator")
-            Animator.Parent = AnimationController
-        end
-    else
-        local tempController = Instance.new("AnimationController")
-        tempController.Parent = Character
-        Animator = Instance.new("Animator")
-        Animator.Parent = tempController
-    end
-
-    for i = #self.Tracks, 1, -1 do
-        local t = self.Tracks[i]
-        if t.IsPlaying and t.Animation.AnimationId ~= ID then
-            t:Stop()
-            t:Destroy()
-            table.remove(self.Tracks, i)
-        elseif not t.IsPlaying then
-            t:Destroy()
-            table.remove(self.Tracks, i)
-        end
-    end
-
-    for _, t in ipairs(self.Tracks) do
-        if t.Animation.AnimationId == ID then
-            return t
-        end
-    end
-
-    local animation = Instance.new("Animation")
-    animation.AnimationId = ID
-
-    local track = Animator:LoadAnimation(animation)
-    track.Looped = looped or false
-    track:Play()
-
-    for markerName, callback in pairs(self.MarkerSignals) do
-        track:GetMarkerReachedSignal(markerName):Connect(function(paramString)
-            callback(track)
-        end)
-    end
-
-    table.insert(self.Tracks, track)
-
-    if self.data and self.data.broadcast then
-        local playerName = target:IsA("Player") and target.Name or target.Name
-        local payload = {
-            type = "replicateAnimation",
-            playerName = playerName,
-            animationId = ID
-        }
-        self.data.broadcast:FireServer(payload)
-    end
-
-    return track
+	if self.stateTrack then
+		if not self.stateTrack.IsPlaying then
+			print("[_stopAction] Resuming state animation:", self.stateTrack.Animation.AnimationId)
+			self.stateTrack:Play()
+		else
+			print("[_stopAction] State animation already playing:", self.stateTrack.Animation.AnimationId)
+		end
+	end
 end
 
 
+function Animations:PlayState(character, animId)
+	if not character or not animId then return end
+	if self.actionTrack then
+		print("[PlayState] Ignored because actionTrack is active")
+		return
+	end
 
-function self:_replicateAnimation()
-    self.data.broadcast.OnClientEvent:Connect(function(payload)
-        if payload.type == "replicateAnimation" then
-            local player = game.Players:FindFirstChild(payload.playerName)
-            if player then
-                self:_playAnimation(player, payload.animationId, false)
-            end
-        end
-    end)
+	local animator = self:_getAnimator(character)
+	if not animator then return end
+
+	if self.lastStateAnim == animId and self.stateTrack then
+		if not self.stateTrack.IsPlaying then
+			print("[PlayState] Resuming state animation:", animId)
+			self.stateTrack:Play()
+		else
+			print("[PlayState] State animation already playing:", animId)
+		end
+		return
+	end
+	if self.stateTrack then
+		print("[PlayState] Stopping previous state animation:", self.lastStateAnim)
+		self.stateTrack:Stop()
+		self.stateTrack:Destroy()
+	end
+
+	self.lastStateAnim = animId
+	self.stateTrack = loadTrack(animator, animId, Enum.AnimationPriority.Movement, true)
+	print("[PlayState] Playing new state animation:", animId)
+	self.stateTrack:Play()
+end
+function Animations:PlayAction(character, animId)
+	if not character or not animId then return end
+
+	local animator = self:_getAnimator(character)
+	if not animator then return end
+
+	print("[PlayAction] Starting action animation:", animId)
+	self:_stopAction()
+
+	if self.stateTrack then
+		print("[PlayAction] Stopping state animation before action:", self.stateTrack.Animation.AnimationId)
+		self.stateTrack:Stop()
+	end
+
+	local track = loadTrack(animator, animId, Enum.AnimationPriority.Action, false)
+	self.actionTrack = track
+	track:Play()
+
+	track.Stopped:Once(function()
+		print("[PlayAction] Action animation stopped:", animId)
+		if track then
+			track:Destroy()
+		end
+		if self.actionTrack == track then
+			self.actionTrack = nil
+		end
+
+		if self.stateTrack then
+			print("[PlayAction] Resuming state animation after action:", self.stateTrack.Animation.AnimationId)
+			self.stateTrack:Play()
+		end
+	end)
 end
 
-function self:_stopAllTracks()
-    for _, track in ipairs(self.Tracks) do
-        if track.IsPlaying then
-            track:Stop()
-        end
-    end
-    self.Tracks = {}
-end
 
-return self
+return Animations
